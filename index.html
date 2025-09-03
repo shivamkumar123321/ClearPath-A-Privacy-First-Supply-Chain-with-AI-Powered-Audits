@@ -1,0 +1,869 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ClearPath: Private & Verifiable Supply Chain</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { 
+            font-family: 'Inter', sans-serif; 
+            background-color: #0d1117;
+        }
+        .glassmorphism {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .history-drawer {
+            transition: transform 0.3s ease-in-out, opacity 0.3s ease-in-out;
+        }
+        .modal-enter {
+            opacity: 0;
+            transform: scale(0.95) translateY(20px);
+        }
+        .modal-enter-active {
+            opacity: 1;
+            transform: scale(1) translateY(0);
+            transition: opacity 300ms, transform 300ms;
+        }
+        .modal-exit {
+            opacity: 1;
+            transform: scale(1) translateY(0);
+        }
+        .modal-exit-active {
+            opacity: 0;
+            transform: scale(0.95) translateY(20px);
+            transition: opacity 300ms, transform 300ms;
+        }
+        .spinner {
+            border: 2px solid rgba(255,255,255,.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            width: 1rem;
+            height: 1rem;
+            animation: spin 1s ease-in-out infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .ai-tooltip .tooltiptext {
+            visibility: hidden;
+            width: 160px;
+            background-color: #1f2937;
+            color: #fff;
+            text-align: center;
+            border-radius: 6px;
+            padding: 5px;
+            position: absolute;
+            z-index: 1;
+            bottom: 125%;
+            left: 50%;
+            margin-left: -80px;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+       .ai-tooltip:hover .tooltiptext {
+            visibility: visible;
+            opacity: 1;
+        }
+    </style>
+</head>
+<body class="text-gray-200">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useRef } = React;
+
+        // --- GEMINI API INTEGRATION ---
+        const callGeminiAPI = async (prompt) => {
+            const apiKey = ""; // Keep this empty, it will be handled by the environment
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+            
+            const payload = {
+                contents: [{ parts: [{ text: prompt }] }],
+            };
+
+            try {
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if (!response.ok) {
+                    throw new Error(`API call failed with status: ${response.status}`);
+                }
+                const result = await response.json();
+                return result.candidates?.[0]?.content?.parts?.[0]?.text || "No content generated.";
+            } catch (error) {
+                console.error("Gemini API Error:", error);
+                return `Error: Could not generate content. ${error.message}`;
+            }
+        };
+
+        // --- MOCK / SIMULATION LAYER ---
+        const ZKCircuits = {
+            generateTransferProof: (product, fromOwner, toOwner) => {
+                console.log(`Generating ZK proof for transferring product ${product.id} from ${fromOwner} to ${toOwner}...`);
+                return {
+                    proof: `zk_proof_${Math.random().toString(36).substr(2, 9)}`,
+                    publicInputs: { productId: product.id, newOwner: toOwner }
+                };
+            },
+            verifyTransferProof: (proof) => {
+                console.log(`Verifying ZK proof...`);
+                return proof.startsWith('zk_proof_');
+            }
+        };
+
+        const MockChainDB = {
+            products: new Map(),
+            history: new Map(),
+            init: () => {
+                const initialProducts = [
+                    { id: 'PHARMA-001', name: 'Vaccine Batch', owner: 'user_shivam', manufacturer: 'BioCorp', status: 'In Transit', image: 'https://images.unsplash.com/photo-1626420925443-c6421f87daa9?q=80&w=1182&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D', description: 'A critical batch of temperature-sensitive vaccines for global distribution, requiring constant monitoring.' },
+                    { id: 'LUX-WATCH-88', name: 'Chronograph Watch', owner: 'user_mohan', manufacturer: 'Timeless Pieces', status: 'Available', image: 'https://images.unsplash.com/photo-1523275335684-37898b6baf30?q=80&w=800&auto=format&fit=crop', description: 'An exquisite timepiece featuring a Swiss automatic movement, sapphire crystal, and a polished stainless steel case.' },
+                    { id: 'ART-PNT-42', name: 'Abstract Painting', owner: 'user_shivam', manufacturer: 'Artist Collective', status: 'In Gallery', image: 'https://images.unsplash.com/photo-1536924940846-227afb31e2a5?q=80&w=800&auto=format&fit=crop', description: 'A vibrant, large-scale acrylic on canvas that explores the fluidity of memory and emotion.' },
+                    { id: 'PHARMA-002', name: 'Gene Therapy', owner: 'user_raj', manufacturer: 'CureAll Inc.', status: 'In Transit', image: 'https://images.unsplash.com/photo-1702802120584-11d6b70f47cd?q=80&w=1032&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D', description: 'A revolutionary gene-editing therapy solution, stored at cryogenic temperatures to ensure efficacy.' },
+                    { id: 'LUX-HB-01', name: 'Leather Handbag', owner: 'user_mohan', manufacturer: 'Artisan Crafts', status: 'Available', image: 'https://images.unsplash.com/photo-1547949003-9792a18a2601?q=80&w=800&auto=format&fit=crop', description: 'A handcrafted Italian leather handbag with gold-plated hardware and a silk-lined interior.' },
+                    { id: 'ART-SCULPT-03', name: 'Bronze Sculpture', owner: 'user_shivam', manufacturer: 'Modern Mythology', status: 'In Gallery', image: 'https://images.unsplash.com/photo-1691317836447-2710cac29f1e?q=80&w=1170&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D', description: 'A powerful bronze sculpture capturing the mythical creature in a moment of dynamic tension.' },
+                    { id: 'TECH-GPU-01', name: 'QuantumCore GPU', owner: 'user_raj', manufacturer: 'FutureTech', status: 'In Transit', image: 'https://images.unsplash.com/photo-1750706281241-774897c00316?q=80&w=1332&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D', description: 'Next-generation graphics processing unit designed for high-performance computing and AI model training.' },
+                    { id: 'FOOD-COFFEE-77', name: 'Geisha Coffee Beans', owner: 'user_mohan', manufacturer: 'Highland Brews', status: 'Available', image: 'https://images.unsplash.com/photo-1509042239860-f550ce710b93?q=80&w=800&auto=format&fit=crop', description: 'Rare, single-origin Geisha coffee beans from Panama, known for their complex floral and tea-like notes.' },
+                    { id: 'LUX-JEWEL-05', name: 'Diamond Necklace', owner: 'user_shivam', manufacturer: 'Elegance Gems', status: 'Available', image: 'https://images.unsplash.com/photo-1588444968576-f8fe92ce56fd?q=80&w=1170&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D', description: 'A platinum necklace set with a flawless 5-carat center diamond, surrounded by a halo of smaller gems.' },
+                    { id: 'TECH-DRONE-X1', name: 'Recon Drone', owner: 'user_raj', manufacturer: 'AeroDynamics', status: 'In Transit', image: 'https://plus.unsplash.com/premium_photo-1752505319864-49b5b8ebbd9a?q=80&w=1074&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D', description: 'A professional-grade quadcopter with a 4K HDR camera, 30-minute flight time, and advanced obstacle avoidance.' },
+                    { id: 'ART-LITH-18', name: 'Lithograph Print', owner: 'user_mohan', manufacturer: 'PrintMakers Guild', status: 'In Gallery', image: 'https://images.unsplash.com/photo-1687564276188-93e1cd48f7ee?q=80&w=1332&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D', description: 'A limited-edition, hand-pulled lithograph print capturing the vibrant colors of a coastal sunset.' },
+                    { id: 'PHARMA-003', name: 'Cancer Inhibitor', owner: 'user_shivam', manufacturer: 'BioCorp', status: 'In Transit', image: 'https://plus.unsplash.com/premium_photo-1670981098417-dac28d081825?q=80&w=1274&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D', description: 'Targeted therapy vials designed to inhibit specific cancer cell growth pathways, requiring careful handling.' },
+                    { id: 'LUX-WATCH-92', name: 'Tourbillon Watch', owner: 'user_raj', manufacturer: 'Timeless Pieces', status: 'Available', image: 'https://images.unsplash.com/photo-1589688934051-ca9059383f4f?q=80&w=1170&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D', description: 'A masterpiece of horology featuring a flying tourbillon complication and an aventurine dial that mimics a starry night sky.' }
+                ];
+                initialProducts.forEach(p => {
+                    MockChainDB.products.set(p.id, p);
+                    MockChainDB.history.set(p.id, [{
+                        owner: p.owner,
+                        timestamp: new Date().toISOString(),
+                        txHash: `tx_${Math.random().toString(36).substr(2, 9)}`,
+                        proof: 'genesis_proof'
+                    }]);
+                });
+            }
+        };
+        MockChainDB.init();
+        
+        // --- DAPP COMPONENTS ---
+        const Footer = () => {
+            const scrollToTop = () => {
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+            };
+
+            const quickLinks = ['Home', 'Dashboard', 'Products', 'Reports', 'About', 'Contact'];
+            const socialIcons = {
+                linkedin: <svg fill="currentColor" className="w-5 h-5" viewBox="0 0 24 24"><path d="M19 0h-14c-2.761 0-5 2.239-5 5v14c0 2.761 2.239 5 5 5h14c2.762 0 5-2.239 5-5v-14c0-2.761-2.238-5-5-5zm-11 19h-3v-11h3v11zm-1.5-12.268c-.966 0-1.75-.79-1.75-1.764s.784-1.764 1.75-1.764 1.75.79 1.75 1.764-.783 1.764-1.75 1.764zm13.5 12.268h-3v-5.604c0-3.368-4-3.113-4 0v5.604h-3v-11h3v1.765c1.396-2.586 7-2.777 7 2.476v6.759z"></path></svg>,
+                twitter: <svg fill="currentColor" className="w-5 h-5" viewBox="0 0 24 24"><path d="M24 4.557c-.883.392-1.832.656-2.828.775 1.017-.609 1.798-1.574 2.165-2.724-.951.564-2.005.974-3.127 1.195-.897-.957-2.178-1.555-3.594-1.555-3.179 0-5.515 2.966-4.797 6.045-4.091-.205-7.719-2.165-10.148-5.144-1.29 2.213-.669 5.108 1.523 6.574-.806-.026-1.566-.247-2.229-.616v.064c0 2.298 1.634 4.212 3.793 4.649-.65.176-1.336.213-2.033.188.593 1.875 2.309 3.249 4.351 3.286-1.794 1.402-4.017 2.141-6.329 2.141-.42 0-.833-.023-1.238-.073 2.298 1.474 5.021 2.34 7.952 2.34 9.471 0 14.655-7.844 14.655-14.655 0-.224-.005-.447-.015-.67.961-.69.1798-1.568 2.457-2.549z"></path></svg>,
+                github: <svg fill="currentColor" className="w-5 h-5" viewBox="0 0 24 24"><path fillRule="evenodd" d="M12 2C6.477 2 2 6.477 2 12c0 4.418 2.865 8.165 6.839 9.49.5.092.682-.217.682-.482 0-.237-.009-.868-.014-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.031-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.203 2.398.1 2.651.64.7 1.03 1.595 1.03 2.688 0 3.848-2.338 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.001 10.001 0 0022 12c0-5.523-4.477-10-10-10z" clipRule="evenodd"></path></svg>
+            };
+
+            return (
+                 <footer className="bg-[#161b22] border-t border-gray-800">
+                    <div className="container mx-auto px-6 pt-16 pb-8">
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-10">
+                            {/* Branding Column */}
+                            <div className="md:col-span-2 lg:col-span-1">
+                                <div className="flex items-center gap-2 mb-4">
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-7 w-7 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" /></svg>
+                                    <h1 className="text-2xl font-bold text-white">ClearPath</h1>
+                                </div>
+                                <p className="text-sm text-gray-400 pr-8">A decentralized platform for a transparent and verifiable supply chain, built with privacy-first principles.</p>
+                            </div>
+
+                            {/* Quick Links Column */}
+                            <div>
+                                <h3 className="font-semibold text-white mb-4">Quick Links</h3>
+                                <ul className="space-y-3">
+                                    {quickLinks.map(link => (
+                                        <li key={link}><a href="#" className="text-gray-400 hover:text-cyan-400 transition-colors">{link}</a></li>
+                                    ))}
+                                </ul>
+                            </div>
+
+                            {/* Contact & Subscribe Column */}
+                            <div className="md:col-span-2 lg:col-span-2">
+                                <h3 className="font-semibold text-white mb-4">Subscribe to our Newsletter</h3>
+                                <p className="text-sm text-gray-400 mb-4">Get the latest updates on new features and products.</p>
+                                <form className="flex items-center gap-2 mb-6">
+                                    <input type="email" placeholder="Enter your email" className="w-full bg-gray-800/50 border border-gray-700 rounded-lg py-2 px-3 text-sm focus:ring-2 focus:ring-cyan-500 outline-none" />
+                                    <button type="submit" className="bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-2 px-4 rounded-lg transition-colors">Subscribe</button>
+                                </form>
+                                 <div className="flex space-x-4">
+                                    {Object.entries(socialIcons).map(([key, icon]) => (
+                                        <a key={key} href="#" aria-label={`Follow us on ${key}`} className="text-gray-400 hover:text-cyan-400 transition-colors">{icon}</a>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                        
+                        {/* Bottom Bar */}
+                        <div className="mt-16 pt-8 border-t border-gray-800 flex flex-col sm:flex-row justify-between items-center text-center">
+                            <p className="text-sm text-gray-500 order-2 sm:order-1 mt-4 sm:mt-0">&copy; {new Date().getFullYear()} ClearPath. All Rights Reserved.</p>
+                            <button onClick={scrollToTop} className="order-1 sm:order-2 text-sm text-gray-400 hover:text-white transition-colors">
+                                Back to Top &uarr;
+                            </button>
+                        </div>
+                    </div>
+                </footer>
+            );
+        };
+
+
+        const Header = ({ currentUser, users, onSwitchUser, onAddUser, onAddProduct }) => {
+            const [isProfileOpen, setIsProfileOpen] = useState(false);
+            const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+            const profileRef = useRef(null);
+            const mobileMenuRef = useRef(null);
+            
+            useEffect(() => {
+                const handleClickOutside = (event) => {
+                    if (profileRef.current && !profileRef.current.contains(event.target)) {
+                        setIsProfileOpen(false);
+                    }
+                     if (mobileMenuRef.current && !mobileMenuRef.current.contains(event.target)) {
+                        setIsMobileMenuOpen(false);
+                    }
+                };
+                document.addEventListener("mousedown", handleClickOutside);
+                return () => document.removeEventListener("mousedown", handleClickOutside);
+            }, []);
+
+            const navLinks = [
+                { name: 'Dashboard', href: '#' },
+                { name: 'Products', href: '#' },
+                { name: 'Reports', href: '#' }
+            ];
+
+            return (
+                <header className="bg-[#161b22]/80 backdrop-blur-sm border-b border-gray-800 sticky top-0 z-40">
+                    <div className="container mx-auto px-4">
+                        <div className="flex justify-between items-center h-20">
+                            {/* Logo and Tagline */}
+                            <div className="flex items-center gap-4">
+                                <div className="flex items-center gap-2">
+                                     <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" /></svg>
+                                    <h1 className="text-3xl font-bold text-white">ClearPath</h1>
+                                </div>
+                                <div className="h-8 w-px bg-gray-700 hidden sm:block"></div>
+                                <p className="text-sm text-gray-500 hidden sm:block">Private & Verifiable Supply Chain</p>
+                            </div>
+
+                            {/* Desktop Navigation */}
+                            <div className="hidden md:flex items-center gap-8">
+                                {navLinks.map(link => (
+                                    <a key={link.name} href={link.href} className="text-sm font-medium text-gray-400 hover:text-white transition-colors">{link.name}</a>
+                                ))}
+                            </div>
+
+                            {/* Right side controls */}
+                            <div className="flex items-center gap-4">
+                                <button onClick={onAddProduct} className="hidden sm:flex bg-cyan-500 hover:bg-cyan-400 text-white font-bold py-2 px-4 text-sm items-center gap-2 rounded-lg transition-all duration-300 transform hover:scale-105 hover:shadow-lg hover:shadow-cyan-500/30">
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M10 5a1 1 0 011 1v3h3a1 1 0 110 2h--3v3a1 1 0 11-2 0v-3H6a1 1 0 110-2h3V6a1 1 0 011-1z" /></svg>
+                                    Add Product
+                                </button>
+                                
+                                {/* Profile Dropdown */}
+                                <div className="relative" ref={profileRef}>
+                                    <button onClick={() => setIsProfileOpen(!isProfileOpen)} className="w-10 h-10 bg-gray-700 rounded-full flex items-center justify-center ring-2 ring-offset-2 ring-offset-[#161b22] ring-transparent hover:ring-cyan-500 transition-all">
+                                        <span className="text-lg font-bold uppercase">{currentUser.charAt(5)}</span>
+                                    </button>
+                                    {isProfileOpen && (
+                                        <div className="absolute right-0 mt-2 w-64 bg-[#1f2937] border border-gray-700 rounded-lg shadow-xl z-50 overflow-hidden">
+                                           <div className="p-4 border-b border-gray-700">
+                                                <p className="font-bold text-white capitalize">{currentUser.split('_')[1]}</p>
+                                                <p className="text-xs text-gray-400">{currentUser}</p>
+                                           </div>
+                                            <div className="p-2">
+                                                <select onChange={(e) => { onSwitchUser(e.target.value); setIsProfileOpen(false); }} value={currentUser} className="w-full bg-gray-800 border border-gray-600 rounded-md p-2 text-sm capitalize mb-2">
+                                                    <option value="" disabled>Switch User</option>
+                                                    {users.map(user => <option key={user} value={user}>{user.split('_')[1]}</option>)}
+                                                </select>
+                                                <button onClick={() => {onAddUser(); setIsProfileOpen(false);}} className="w-full text-left p-2 text-sm text-gray-300 hover:bg-gray-700 rounded-md">Add New User</button>
+                                            </div>
+                                           <hr className="border-gray-700" />
+                                            <div className="p-2">
+                                                <a href="#" className="block w-full text-left p-2 text-sm text-gray-300 hover:bg-gray-700 rounded-md">Profile</a>
+                                                <a href="#" className="block w-full text-left p-2 text-sm text-gray-300 hover:bg-gray-700 rounded-md">Settings</a>
+                                                <a href="#" className="block w-full text-left p-2 text-sm text-red-400 hover:bg-red-500/20 rounded-md">Logout</a>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                                
+                                {/* Mobile Hamburger Menu Button */}
+                                <button className="md:hidden text-gray-400 hover:text-white" onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}>
+                                   <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16"></path></svg>
+                                </button>
+                            </div>
+                        </div>
+                         {/* Mobile Menu */}
+                        {isMobileMenuOpen && (
+                            <div ref={mobileMenuRef} className="md:hidden pb-4">
+                                {navLinks.map(link => (
+                                    <a key={link.name} href={link.href} className="block py-2 px-4 text-sm text-gray-300 hover:bg-gray-700 rounded-md">{link.name}</a>
+                                ))}
+                                <button onClick={onAddProduct} className="w-full mt-2 flex bg-cyan-500 text-white font-bold py-2 px-4 text-sm items-center justify-center gap-2 rounded-lg">
+                                    Add Product
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                </header>
+            );
+        };
+        
+        const StatusBadge = ({ status }) => {
+            const styles = {
+                'Available': 'bg-green-500/10 text-green-300 border border-green-500/30',
+                'In Transit': 'bg-blue-500/10 text-blue-300 border border-blue-500/30',
+                'In Gallery': 'bg-purple-500/10 text-purple-300 border border-purple-500/30'
+            };
+            return (
+                <div className={`text-xs px-3 py-1 rounded-full font-semibold ${styles[status] || 'bg-gray-500/10 text-gray-300'}`}>
+                    {status}
+                </div>
+            );
+        };
+
+        const OwnershipBadge = ({ isOwner }) => {
+            if (isOwner) {
+                return <span className="text-xs font-semibold text-gray-400 flex items-center gap-1.5">✅ Owned</span>
+            }
+            return <span className="text-xs font-semibold text-yellow-400 flex items-center gap-1.5">🔄 Transferable</span>
+        };
+
+
+        const ProductCard = ({ product, onTransfer, isOwner, onShowDetails }) => {
+            return (
+                <div className="group bg-[#161b22] border border-gray-800 rounded-xl overflow-hidden shadow-lg hover:shadow-cyan-500/20 transition-all duration-300 flex flex-col">
+                    <div className="relative overflow-hidden">
+                        <img src={product.image} alt={product.name} className="w-full h-56 object-cover transition-transform duration-300 group-hover:scale-105" />
+                        <div className="absolute top-3 right-3">
+                            <StatusBadge status={product.status} />
+                        </div>
+
+                        {/* --- Desktop Hover Actions --- */}
+                        <div className="absolute inset-0 bg-black/70 backdrop-blur-sm flex-col items-center justify-center p-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300 hidden md:flex">
+                           <button 
+                                onClick={(e) => { e.stopPropagation(); onShowDetails(product); }}
+                                className="w-full mb-3 bg-gray-200/90 hover:bg-white text-gray-900 font-bold py-2 px-4 rounded-lg transition-transform hover:scale-105 flex items-center justify-center gap-2"
+                            >
+                                <span className="text-lg">👁️</span> View Details
+                            </button>
+                            {isOwner && (
+                                <button
+                                    onClick={(e) => { e.stopPropagation(); onTransfer(product); }}
+                                    className="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-2 px-4 rounded-lg transition-transform hover:scale-105 flex items-center justify-center gap-2"
+                                >
+                                    <span className="text-lg">🔄</span> Transfer
+                                </button>
+                            )}
+                        </div>
+                    </div>
+
+                    <div className="p-4 flex flex-col flex-grow">
+                        <h3 className="text-lg font-bold text-gray-100 truncate">{product.name}</h3>
+                        <p className="text-sm text-gray-400 mb-3">by {product.manufacturer}</p>
+                        
+                        {/* --- Mobile Visible Actions --- */}
+                        <div className="space-y-2 mt-2 mb-4 md:hidden">
+                            <button 
+                                onClick={(e) => { e.stopPropagation(); onShowDetails(product); }}
+                                className="w-full bg-gray-700/80 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded-lg transition-colors flex items-center justify-center gap-2 text-sm"
+                            >
+                                <span className="text-lg">👁️</span> View Details
+                            </button>
+                            {isOwner && (
+                                <button
+                                    onClick={(e) => { e.stopPropagation(); onTransfer(product); }}
+                                    className="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-bold py-2 px-4 rounded-lg transition-colors flex items-center justify-center gap-2 text-sm"
+                                >
+                                    <span className="text-lg">🔄</span> Transfer
+                                </button>
+                            )}
+                        </div>
+                        
+                        <div className="mt-auto pt-3 border-t border-gray-700/50 flex justify-between items-center">
+                            <OwnershipBadge isOwner={isOwner} />
+                            <p className="text-xs text-gray-500 font-mono">{product.id}</p>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+
+        const TransferModal = ({ product, currentUser, users, onTransfer, onClose }) => {
+            if (!product) return null;
+            const otherUsers = users.filter(u => u !== currentUser);
+            const [toOwner, setToOwner] = useState(otherUsers[0] || '');
+
+            return (
+                <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 modal-enter-active">
+                    <div className="bg-[#161b22] border border-gray-800 rounded-xl p-6 w-full max-w-md">
+                        <h2 className="text-xl font-bold mb-4">Transfer Ownership</h2>
+                        <p className="mb-2">Product: <span className="font-semibold">{product.name}</span></p>
+                        <p className="text-sm text-gray-400 mb-4">ID: {product.id}</p>
+                        <div className="mb-4">
+                            <label htmlFor="owner" className="block text-sm font-medium text-gray-400 mb-2">Transfer to:</label>
+                            <select id="owner" value={toOwner} onChange={e => setToOwner(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded-md p-2 capitalize">
+                                {otherUsers.map(user => <option key={user} value={user}>{user.split('_')[1]}</option>)}
+                            </select>
+                        </div>
+                        <div className="flex justify-end gap-4">
+                            <button onClick={onClose} className="py-2 px-4 bg-gray-600 hover:bg-gray-500 rounded-lg transition-colors">Cancel</button>
+                            <button onClick={() => { if(toOwner) { onTransfer(product, toOwner); onClose(); } }} className="py-2 px-4 bg-cyan-600 hover:bg-cyan-500 rounded-lg transition-colors">Confirm Transfer</button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+        
+        const AddUserModal = ({ onAddUser, onClose, users }) => {
+            const [newUserName, setNewUserName] = useState('');
+            const [validationError, setValidationError] = useState('');
+
+            const handleConfirm = () => {
+                const trimmedName = newUserName.trim();
+                if (!trimmedName) {
+                    setValidationError('User name is required.');
+                    return;
+                }
+                const formattedName = trimmedName.toLowerCase().replace(/\s/g, '');
+                const newUserId = `user_${formattedName}`;
+                if (users.includes(newUserId)) {
+                    setValidationError('This username is already taken.');
+                    return;
+                }
+                onAddUser(trimmedName);
+                onClose();
+            };
+
+            useEffect(() => {
+                const handleKeyDown = (event) => {
+                    if (event.key === 'Escape') {
+                        onClose();
+                    } else if (event.key === 'Enter') {
+                        event.preventDefault(); // Prevent form submission if any
+                        handleConfirm();
+                    }
+                };
+
+                window.addEventListener('keydown', handleKeyDown);
+
+                return () => {
+                    window.removeEventListener('keydown', handleKeyDown);
+                };
+            }, [newUserName, users]); // Re-bind to capture the latest state
+
+            return (
+                <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 modal-enter-active">
+                    <div className="bg-[#161b22] border border-gray-800 rounded-xl p-8 w-full max-w-md">
+                        <h2 className="text-2xl font-bold mb-2 text-white">Add New User</h2>
+                        <hr className="border-gray-700 mb-6" />
+                        
+                        <div className="mb-4">
+                             <label htmlFor="newUserName" className="sr-only">User Name</label>
+                             <div className="relative">
+                                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">👤</span>
+                                <input 
+                                    id="newUserName" 
+                                    type="text" 
+                                    value={newUserName} 
+                                    onChange={(e) => { setNewUserName(e.target.value); setValidationError(''); }} 
+                                    placeholder="Enter user name" 
+                                    className="w-full bg-gray-900/50 border border-gray-700 rounded-lg p-3 pl-10 focus:ring-2 focus:ring-cyan-500 outline-none transition-shadow" 
+                                    autoFocus 
+                                />
+                             </div>
+                             {validationError && <p className="text-red-400 text-sm mt-2">{validationError}</p>}
+                        </div>
+
+                        <div className="flex justify-center items-center gap-4 mt-8">
+                            <button onClick={onClose} aria-label="Cancel adding a new user" className="py-2 px-5 bg-gray-700 text-gray-300 hover:bg-gray-600 border border-gray-600 rounded-lg transition-colors flex items-center gap-2">
+                                <span>❌</span> Cancel
+                            </button>
+                            <button onClick={handleConfirm} aria-label="Confirm adding a new user" className="py-2 px-5 bg-cyan-600 text-white hover:bg-cyan-500 rounded-lg transition-colors flex items-center gap-2 shadow-md hover:shadow-lg shadow-cyan-500/20 hover:shadow-cyan-500/30">
+                                <span>➕</span> Add User
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+
+        const AddProductModal = ({ onAddProduct, onClose }) => {
+            const [product, setProduct] = useState({ name: '', manufacturer: '', image: '', description: '' });
+            const [errors, setErrors] = useState({});
+            const [isGenerating, setIsGenerating] = useState(false);
+
+            const validate = () => {
+                const newErrors = {};
+                if (!product.name.trim()) newErrors.name = 'Product name is required.';
+                if (!product.manufacturer.trim()) newErrors.manufacturer = 'Manufacturer is required.';
+                if (!product.image.trim()) {
+                    newErrors.image = 'Image URL is required.';
+                } else {
+                    try {
+                        new URL(product.image);
+                    } catch (_) {
+                        newErrors.image = 'Please enter a valid URL.';
+                    }
+                }
+                setErrors(newErrors);
+                return Object.keys(newErrors).length === 0;
+            };
+            
+            const handleConfirm = () => {
+                if (validate()) {
+                    onAddProduct(product);
+                    onClose();
+                }
+            };
+            
+            useEffect(() => {
+                const handleKeyDown = (e) => {
+                    if (e.key === 'Escape') onClose();
+                    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleConfirm();
+                };
+                window.addEventListener('keydown', handleKeyDown);
+                return () => window.removeEventListener('keydown', handleKeyDown);
+            }, [product]);
+
+
+            const handleGenerateDescription = async () => {
+                if (!product.name || !product.manufacturer) {
+                    setErrors(prev => ({...prev, description: "Please enter product name and manufacturer first."}));
+                    return;
+                };
+                setIsGenerating(true);
+                setErrors(prev => ({...prev, description: null}));
+                const prompt = `Generate a brief, professional product description for a product named '${product.name}' from the manufacturer '${product.manufacturer}'. Focus on quality, craftsmanship, or key features. Keep it under 30 words.`;
+                const desc = await callGeminiAPI(prompt);
+                setProduct(prev => ({ ...prev, description: desc.replace(/"/g, '') }));
+                setIsGenerating(false);
+            };
+            
+            const handleFileDrop = (e) => {
+                e.preventDefault();
+                const files = e.dataTransfer.files;
+                if(files.length > 0){
+                    const reader = new FileReader();
+                    reader.onload = (event) => {
+                        setProduct(prev => ({ ...prev, image: event.target.result }));
+                    };
+                    reader.readAsDataURL(files[0]);
+                }
+            };
+            
+            const handleFileChange = (e) => {
+                const files = e.target.files;
+                 if(files.length > 0){
+                    const reader = new FileReader();
+                    reader.onload = (event) => {
+                        setProduct(prev => ({ ...prev, image: event.target.result }));
+                    };
+                    reader.readAsDataURL(files[0]);
+                }
+            }
+
+            return (
+                <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 modal-enter-active" onDragOver={(e) => e.preventDefault()} onDrop={(e) => e.preventDefault()}>
+                    <div className="bg-[#161b22] border border-gray-800 rounded-xl p-8 w-full max-w-2xl">
+                        <h2 className="text-2xl font-bold mb-2 text-white">Add New Product</h2>
+                        <hr className="border-gray-700 mb-6" />
+                        
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4">
+                            {/* Left Column: Form Fields */}
+                            <div className="space-y-4">
+                                <div>
+                                    <label htmlFor="productName" className="sr-only">Product Name</label>
+                                    <div className="relative">
+                                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">📦</span>
+                                        <input id="productName" value={product.name} onChange={e => setProduct(p => ({...p, name: e.target.value}))} placeholder="Product Name" className="w-full bg-gray-900/50 border border-gray-700 rounded-lg p-3 pl-10 focus:ring-2 focus:ring-cyan-500 outline-none" autoFocus />
+                                    </div>
+                                    {errors.name && <p className="text-red-400 text-sm mt-1">{errors.name}</p>}
+                                </div>
+                                <div>
+                                    <label htmlFor="manufacturer" className="sr-only">Manufacturer</label>
+                                    <div className="relative">
+                                         <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">🏭</span>
+                                        <input id="manufacturer" value={product.manufacturer} onChange={e => setProduct(p => ({...p, manufacturer: e.target.value}))} placeholder="Manufacturer" className="w-full bg-gray-900/50 border border-gray-700 rounded-lg p-3 pl-10 focus:ring-2 focus:ring-cyan-500 outline-none" />
+                                    </div>
+                                    {errors.manufacturer && <p className="text-red-400 text-sm mt-1">{errors.manufacturer}</p>}
+                                </div>
+                                <div>
+                                     <label htmlFor="description" className="sr-only">Description</label>
+                                     <div className="relative">
+                                         <span className="absolute left-3 top-4 -translate-y-1/2 text-gray-400">📝</span>
+                                        <textarea id="description" value={product.description} onChange={e => setProduct(p => ({...p, description: e.target.value}))} placeholder="Description" className="w-full bg-gray-900/50 border border-gray-700 rounded-lg p-3 pl-10 h-32 resize-none focus:ring-2 focus:ring-cyan-500 outline-none" />
+                                    </div>
+                                    <div className="flex justify-end items-center mt-1">
+                                         {errors.description && <p className="text-red-400 text-sm mr-auto">{errors.description}</p>}
+                                        <button onClick={handleGenerateDescription} disabled={isGenerating} className="ai-tooltip relative text-xs flex items-center gap-1.5 text-purple-400 hover:text-purple-300 disabled:opacity-50">
+                                            {isGenerating ? <div className="spinner !w-3 !h-3"></div> : '✨'} Generate with AI
+                                            <span className="tooltiptext">Generates a brief description based on product name and manufacturer.</span>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Right Column: Image Upload & Preview */}
+                            <div className="space-y-4">
+                                <div>
+                                    <label htmlFor="imageUrl" className="sr-only">Image URL</label>
+                                    <div className="relative">
+                                         <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">🌐</span>
+                                        <input id="imageUrl" value={product.image} onChange={e => setProduct(p => ({...p, image: e.target.value}))} placeholder="Image URL" className="w-full bg-gray-900/50 border border-gray-700 rounded-lg p-3 pl-10 focus:ring-2 focus:ring-cyan-500 outline-none" />
+                                    </div>
+                                    {errors.image && <p className="text-red-400 text-sm mt-1">{errors.image}</p>}
+                                </div>
+                                <div 
+                                    className="w-full h-48 border-2 border-dashed border-gray-600 rounded-lg flex flex-col items-center justify-center text-gray-500 bg-gray-900/50"
+                                    onDrop={handleFileDrop}
+                                    onDragOver={(e) => e.preventDefault()}
+                                >
+                                    {product.image && !errors.image ? (
+                                        <img src={product.image} alt="Preview" className="w-full h-full object-cover rounded-lg" />
+                                    ) : (
+                                        <>
+                                            <svg className="w-10 h-10 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                                            <p>Drag & drop image here</p>
+                                            <span className="text-xs my-1">or</span>
+                                            <label htmlFor="file-upload" className="cursor-pointer text-cyan-400 hover:underline">
+                                                Click to browse
+                                            </label>
+                                            <input id="file-upload" name="file-upload" type="file" className="sr-only" onChange={handleFileChange} accept="image/*" />
+                                        </>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="flex justify-end items-center gap-4 mt-8">
+                            <button onClick={onClose} aria-label="Cancel adding new product" className="py-2 px-5 bg-transparent text-gray-400 hover:bg-gray-700 border border-gray-600 rounded-lg transition-colors">
+                                Cancel
+                            </button>
+                            <button onClick={handleConfirm} aria-label="Confirm adding new product" className="py-2 px-5 bg-cyan-600 text-white hover:bg-cyan-500 rounded-lg transition-colors shadow-md hover:shadow-lg shadow-cyan-500/20 hover:shadow-cyan-500/30">
+                               Add Product
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+        
+        const ProductDetailModal = ({ viewingHistory, onClose, productName }) => {
+            const [summary, setSummary] = useState('');
+            const [isGenerating, setIsGenerating] = useState(false);
+            const isVisible = !!viewingHistory;
+
+            if (!viewingHistory) return null;
+            
+            const { productId, history } = viewingHistory;
+
+            const handleGenerateSummary = async () => {
+                setIsGenerating(true);
+                setSummary('');
+                const formattedHistory = history.map(h => `- Transferred to ${h.owner} on ${new Date(h.timestamp).toLocaleString()}`).join('\n');
+                const prompt = `Act as a supply chain auditor. Based on the following transfer log for the product "${productName}", provide a concise summary of its chain of custody. Mention each owner and the date of transfer. Here is the log:\n${formattedHistory}`;
+                const result = await callGeminiAPI(prompt);
+                setSummary(result);
+                setIsGenerating(false);
+            };
+        
+            return (
+                <div className={`fixed inset-0 bg-black bg-opacity-70 z-40 transition-opacity duration-300 ${isVisible ? 'opacity-100' : 'opacity-0'}`} onClick={onClose}>
+                    <div 
+                        className={`history-drawer fixed top-0 right-0 h-full w-full max-w-md bg-[#161b22] border-l border-gray-800 shadow-xl p-6 transform flex flex-col ${isVisible ? 'translate-x-0' : 'translate-x-full'}`}
+                        onClick={e => e.stopPropagation()}
+                    >
+                        <div className="flex justify-between items-center mb-6">
+                            <h2 className="text-xl font-bold">Transfer History: {productName}</h2>
+                            <button onClick={onClose} className="text-gray-400 hover:text-white text-3xl font-bold">&times;</button>
+                        </div>
+                        <p className="text-sm text-gray-400 mb-4">Product ID: <span className="font-mono">{productId}</span></p>
+                        
+                        <div className="mb-4">
+                            <button onClick={handleGenerateSummary} disabled={isGenerating} className="w-full flex justify-center items-center gap-2 text-sm py-2 px-4 bg-orange-600 hover:bg-orange-500 rounded-lg transition-colors disabled:opacity-50">
+                                {isGenerating ? <div className="spinner"></div> : '✨'} Generate AI Audit Summary
+                            </button>
+                            {summary && (
+                                <div className="mt-4 p-3 bg-gray-900/50 rounded-lg border border-gray-700">
+                                    <h4 className="font-bold text-sm mb-2 text-orange-400">AI Summary:</h4>
+                                    <p className="text-sm text-gray-300 whitespace-pre-wrap">{summary}</p>
+                                </div>
+                            )}
+                        </div>
+
+                        <ul className="space-y-4 flex-grow overflow-y-auto pr-2">
+                            {history.map((entry, index) => (
+                                <li key={index} className="relative pl-6">
+                                    <div className="absolute left-0 top-1 w-3 h-3 bg-cyan-500 rounded-full border-2 border-[#161b22]"></div>
+                                    {index < history.length -1 && <div className="absolute left-[5px] top-1 h-full w-px bg-gray-700"></div>}
+                                    <p className="font-semibold text-gray-200 capitalize">Owner: {entry.owner.split('_')[1]}</p>
+                                    <p className="text-xs text-gray-400">{new Date(entry.timestamp).toLocaleString()}</p>
+                                    <p className="text-xs text-gray-500 font-mono break-all mt-1">Tx: {entry.txHash}</p>
+                                </li>
+                            ))}
+                        </ul>
+                    </div>
+                </div>
+            );
+        };
+        
+        const App = () => {
+            const [products, setProducts] = useState([]);
+            const [users, setUsers] = useState(['user_shivam', 'user_mohan', 'user_raj']);
+            const [currentUser, setCurrentUser] = useState('user_shivam');
+            const [productToTransfer, setProductToTransfer] = useState(null);
+            const [notification, setNotification] = useState(null);
+            const [viewingHistory, setViewingHistory] = useState(null);
+            const [searchTerm, setSearchTerm] = useState('');
+            const [statusFilter, setStatusFilter] = useState('All');
+            const [isAddingUser, setIsAddingUser] = useState(false);
+            const [isAddingProduct, setIsAddingProduct] = useState(false);
+
+            useEffect(() => {
+                setProducts(Array.from(MockChainDB.products.values()));
+            }, []);
+
+            const filteredProducts = useMemo(() => {
+                return products.filter(p => {
+                    const searchMatch = p.name.toLowerCase().includes(searchTerm.toLowerCase()) || p.id.toLowerCase().includes(searchTerm.toLowerCase());
+                    const statusMatch = statusFilter === 'All' || p.status === statusFilter;
+                    return searchMatch && statusMatch;
+                });
+            }, [products, searchTerm, statusFilter]);
+            
+            const showNotification = (message, type = 'success') => {
+                setNotification({ message, type });
+                setTimeout(() => setNotification(null), 5000);
+            };
+
+            const handleConfirmTransfer = (product, toOwner) => {
+                const { proof } = ZKCircuits.generateTransferProof(product, currentUser, toOwner);
+                const isProofValid = ZKCircuits.verifyTransferProof(proof);
+
+                if (isProofValid) {
+                    const updatedProduct = { ...product, owner: toOwner, status: 'In Transit' };
+                    MockChainDB.products.set(product.id, updatedProduct);
+                    const newHistoryEntry = { owner: toOwner, timestamp: new Date().toISOString(), txHash: `tx_${Math.random().toString(36).substr(2, 9)}`, proof };
+                    const currentHistory = MockChainDB.history.get(product.id) || [];
+                    MockChainDB.history.set(product.id, [ ...currentHistory, newHistoryEntry ]);
+                    setProducts(Array.from(MockChainDB.products.values()));
+                    showNotification(`Product transferred to ${toOwner.split('_')[1]}.`, 'success');
+                } else {
+                    showNotification(`Transfer failed: Invalid ZK proof.`, 'error');
+                }
+            };
+
+            const handleShowDetails = (product) => {
+                const history = MockChainDB.history.get(product.id) || [];
+                setViewingHistory({productId: product.id, history: history.slice().reverse(), productName: product.name});
+            };
+
+            const handleAddNewUser = (newUserName) => {
+                const formattedName = newUserName.toLowerCase().replace(/\s/g, '');
+                if (!formattedName) return;
+                const newUserId = `user_${formattedName}`;
+                if (users.includes(newUserId)) {
+                    showNotification(`User "${newUserName}" already exists.`, 'error');
+                    return;
+                }
+                setUsers([...users, newUserId]);
+                setCurrentUser(newUserId);
+                showNotification(`User "${newUserName}" added and selected.`, 'success');
+            };
+
+            const handleAddNewProduct = (newProduct) => {
+                const newId = `${newProduct.manufacturer.slice(0,4).toUpperCase()}-${Math.random().toString(36).substr(2, 4).toUpperCase()}`;
+                const productToAdd = { ...newProduct, id: newId, owner: currentUser, status: 'Available' };
+                MockChainDB.products.set(newId, productToAdd);
+                MockChainDB.history.set(newId, [{ owner: currentUser, timestamp: new Date().toISOString(), txHash: `tx_${Math.random().toString(36).substr(2, 9)}`, proof: 'genesis_proof' }]);
+                setProducts(Array.from(MockChainDB.products.values()));
+                showNotification(`Product "${newProduct.name}" added.`, 'success');
+            };
+
+            const filterOptions = ['All', 'In Transit', 'In Gallery', 'Available'];
+
+            return (
+                <div className="min-h-screen flex flex-col">
+                    <Header 
+                        currentUser={currentUser} 
+                        users={users}
+                        onSwitchUser={setCurrentUser}
+                        onAddUser={() => setIsAddingUser(true)}
+                        onAddProduct={() => setIsAddingProduct(true)}
+                    />
+                    
+                    <main className="container mx-auto p-4 md:p-8 flex-grow">
+                        <section>
+                            <div className="flex flex-col md:flex-row items-center justify-between mb-6 gap-4">
+                                <h2 className="text-3xl font-bold text-white">Product Dashboard</h2>
+                                <div className="relative w-full md:w-auto">
+                                   <input type="text" placeholder="Search products..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full md:w-72 p-2 pl-10 bg-gray-800/50 border border-gray-700 rounded-lg focus:ring-2 focus:ring-cyan-500 outline-none" />
+                                   <svg className="w-5 h-5 text-gray-400 absolute top-1/2 left-3 -translate-y-1/2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                                </div>
+                            </div>
+
+                             <div className="flex items-center justify-center space-x-2 p-1 bg-gray-800/50 rounded-lg mb-8 max-w-md mx-auto">
+                                {filterOptions.map(option => (
+                                    <button 
+                                        key={option}
+                                        onClick={() => setStatusFilter(option)}
+                                        className={`w-full text-center px-4 py-2 text-sm font-semibold rounded-md transition-colors duration-200 ${statusFilter === option ? 'bg-cyan-600 text-white shadow' : 'text-gray-400 hover:bg-gray-700/50'}`}
+                                    >
+                                        {option}
+                                    </button>
+                                ))}
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                                {filteredProducts.map(product => (
+                                    <ProductCard 
+                                        key={product.id}
+                                        product={product} 
+                                        onTransfer={setProductToTransfer} 
+                                        isOwner={product.owner === currentUser} 
+                                        onShowDetails={handleShowDetails}
+                                    />
+                                ))}
+                            </div>
+
+                            <div className="mt-12 text-center">
+                                <button className="bg-gray-700 hover:bg-gray-600 text-gray-300 font-bold py-2 px-6 rounded-lg transition-colors">
+                                    Load More Products
+                                </button>
+                            </div>
+
+                        </section>
+                    </main>
+
+                    {productToTransfer && <TransferModal product={productToTransfer} currentUser={currentUser} users={users} onTransfer={handleConfirmTransfer} onClose={() => setProductToTransfer(null)} />}
+                    {viewingHistory && <ProductDetailModal viewingHistory={viewingHistory} productName={viewingHistory.productName} onClose={() => setViewingHistory(null)} />}
+                    {isAddingUser && <AddUserModal onAddUser={handleAddNewUser} onClose={() => setIsAddingUser(false)} users={users} />}
+                    {isAddingProduct && <AddProductModal onAddProduct={handleAddNewProduct} onClose={() => setIsAddingProduct(false)} />}
+                    
+                    <Footer />
+                </div>
+            );
+        };
+
+        const container = document.getElementById('root');
+        const root = ReactDOM.createRoot(container);
+        root.render(<App />);
+    </script>
+</body>
+</html>
+
