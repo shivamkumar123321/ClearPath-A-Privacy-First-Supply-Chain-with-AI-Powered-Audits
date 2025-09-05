@@ -102,7 +102,7 @@
                 return result.candidates?.[0]?.content?.parts?.[0]?.text || "No content generated.";
             } catch (error) {
                 console.error("Gemini API Error:", error);
-                return `Error: Could not generate content. ${error.message}`;
+                throw error;
             }
         };
 
@@ -502,7 +502,7 @@
         };
 
 
-        const AddProductModal = ({ onAddProduct, onClose }) => {
+        const AddProductModal = ({ onAddProduct, onClose, showNotification }) => {
             const [product, setProduct] = useState({ name: '', manufacturer: '', image: '', description: '' });
             const [errors, setErrors] = useState({});
             const [isGenerating, setIsGenerating] = useState(false);
@@ -548,10 +548,15 @@
                 };
                 setIsGenerating(true);
                 setErrors(prev => ({...prev, description: null}));
-                const prompt = `Generate a brief, professional product description for a product named '${product.name}' from the manufacturer '${product.manufacturer}'. Focus on quality, craftsmanship, or key features. Keep it under 30 words.`;
-                const desc = await callGeminiAPI(prompt);
-                setProduct(prev => ({ ...prev, description: desc.replace(/"/g, '') }));
-                setIsGenerating(false);
+                try {
+                    const prompt = `Generate a brief, professional product description for a product named '${product.name}' from the manufacturer '${product.manufacturer}'. Focus on quality, craftsmanship, or key features. Keep it under 30 words.`;
+                    const desc = await callGeminiAPI(prompt);
+                    setProduct(prev => ({ ...prev, description: desc.replace(/"/g, '') }));
+                } catch (error) {
+                    showNotification('AI description generation failed.', 'error');
+                } finally {
+                    setIsGenerating(false);
+                }
             };
             
             const handleFileDrop = (e) => {
@@ -663,7 +668,7 @@
             );
         };
         
-        const ProductDetailModal = ({ viewingHistory, onClose, productName }) => {
+        const ProductDetailModal = ({ viewingHistory, onClose, productName, showNotification }) => {
             const [summary, setSummary] = useState('');
             const [isGenerating, setIsGenerating] = useState(false);
             const isVisible = !!viewingHistory;
@@ -675,11 +680,16 @@
             const handleGenerateSummary = async () => {
                 setIsGenerating(true);
                 setSummary('');
-                const formattedHistory = history.map(h => `- Transferred to ${h.owner} on ${new Date(h.timestamp).toLocaleString()}`).join('\n');
-                const prompt = `Act as a supply chain auditor. Based on the following transfer log for the product "${productName}", provide a concise summary of its chain of custody. Mention each owner and the date of transfer. Here is the log:\n${formattedHistory}`;
-                const result = await callGeminiAPI(prompt);
-                setSummary(result);
-                setIsGenerating(false);
+                try {
+                    const formattedHistory = history.map(h => `- Transferred to ${h.owner} on ${new Date(h.timestamp).toLocaleString()}`).join('\n');
+                    const prompt = `Act as a supply chain auditor. Based on the following transfer log for the product "${productName}", provide a concise summary of its chain of custody. Mention each owner and the date of transfer. Here is the log:\n${formattedHistory}`;
+                    const result = await callGeminiAPI(prompt);
+                    setSummary(result);
+                } catch (error) {
+                    showNotification('AI summary generation failed.', 'error');
+                } finally {
+                    setIsGenerating(false);
+                }
             };
         
             return (
@@ -722,6 +732,24 @@
             );
         };
         
+        const Notification = ({ notification, onClose }) => {
+            if (!notification) return null;
+
+            const { message, type } = notification;
+            const baseClasses = "fixed top-5 right-5 p-4 rounded-lg shadow-lg text-white flex items-center gap-3";
+            const typeClasses = {
+                success: 'bg-green-600',
+                error: 'bg-red-600',
+            };
+
+            return (
+                <div className={`${baseClasses} ${typeClasses[type] || 'bg-gray-700'}`}>
+                    <span>{message}</span>
+                    <button onClick={onClose} className="text-xl font-bold">&times;</button>
+                </div>
+            );
+        };
+
         const App = () => {
             const [products, setProducts] = useState([]);
             const [users, setUsers] = useState(['user_shivam', 'user_mohan', 'user_raj']);
@@ -851,10 +879,11 @@
                     </main>
 
                     {productToTransfer && <TransferModal product={productToTransfer} currentUser={currentUser} users={users} onTransfer={handleConfirmTransfer} onClose={() => setProductToTransfer(null)} />}
-                    {viewingHistory && <ProductDetailModal viewingHistory={viewingHistory} productName={viewingHistory.productName} onClose={() => setViewingHistory(null)} />}
+                    {viewingHistory && <ProductDetailModal viewingHistory={viewingHistory} productName={viewingHistory.productName} onClose={() => setViewingHistory(null)} showNotification={showNotification} />}
                     {isAddingUser && <AddUserModal onAddUser={handleAddNewUser} onClose={() => setIsAddingUser(false)} users={users} />}
-                    {isAddingProduct && <AddProductModal onAddProduct={handleAddNewProduct} onClose={() => setIsAddingProduct(false)} />}
+                    {isAddingProduct && <AddProductModal onAddProduct={handleAddNewProduct} onClose={() => setIsAddingProduct(false)} showNotification={showNotification} />}
                     
+                    <Notification notification={notification} onClose={() => setNotification(null)} />
                     <Footer />
                 </div>
             );
